@@ -1,0 +1,48 @@
+*.py[cod]
+
+__pycache__
+
+# Eclipse project files
+.project
+.pydevproject
+.settings/
+
+# Intellij IDEA PyCharm
+.idea/
+.idea_modules/
+
+# default output folder when running/testing locally
+spark-warehouse/
+
+# get-data.sh puts data into
+crawl-data/
+input/
+input_/
+*.xlsx
+.vscode/
+*.txt
+*.pem
+*.ppk
+*.zip
+*.sh
+*.csv
+__init__.py
+simple/pyahocorasick_linux/
+*.egg
+output/
+!sp500.xlsx
+text_classifier
+*.pkl
+vscode.env
+*.xlsm
+*.db
+*.xlsx
+*.parquet
+data/
+*.exe
+*.ilk
+*.obj
+*.pdb
+data_/
+*.npz
+*.docx
