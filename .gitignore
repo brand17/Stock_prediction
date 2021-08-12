@@ -46,3 +46,4 @@ data/
 data_/
 *.npz
 *.docx
+*.log
