@@ -9,21 +9,25 @@ class market_data():
     shift=-3
     ):
     # path_to_market_data = "../data/market_data.xlsx"
-    if not os.path.isfile(path_to_market_data):
-      # path_to_sp500 = "../sp500.xlsx"
-      df = pd.read_excel(path_to_sp500, engine='openpyxl')
-      all_comps = []
-      for idx in df.Symbol:
-        all_comps += [idx]
-      all_comps = " ".join(all_comps)
-      import yfinance as yf
-      df =  yf.download(all_comps, start="2016-08-01")["Adj Close"]
-      df.to_excel(path_to_market_data, sheet_name="Sheet1", engine='openpyxl')
+    parquet_file_name = os.path.dirname(os.path.abspath(path_to_market_data)) + '/market_data.parquet'
+    if not os.path.isfile(parquet_file_name):
+      if not os.path.isfile(path_to_market_data):
+        # path_to_sp500 = "../sp500.xlsx"
+        df = pd.read_excel(path_to_sp500, engine='openpyxl')
+        all_comps = []
+        for idx in df.Symbol:
+          all_comps += [idx]
+        all_comps = " ".join(all_comps)
+        import yfinance as yf
+        df =  yf.download(all_comps, start="2016-08-01")["Adj Close"]
+        df.to_excel(path_to_market_data, sheet_name="Sheet1", engine='openpyxl')
+      else:
+        df = pd.read_excel(path_to_market_data, engine='openpyxl')
+      df = df[pd.notnull(df["A"])]
+      df.Date = df.Date.dt.date
+      df.set_index('Date', inplace=True)
     else:
-      df = pd.read_excel(path_to_market_data, engine='openpyxl')
-    df = df[pd.notnull(df["A"])]
-    df.Date = df.Date.dt.date
-    df.set_index('Date', inplace=True)
+      df = pd.read_parquet(parquet_file_name)
 
     import pandas_datareader.data as web
 
@@ -31,8 +35,9 @@ class market_data():
     end = df.index[-1]
 
     SP500 = web.DataReader(['sp500'], 'fred', start, end)
+    # SP500 = web.DataReader(['^GSPC'], 'yahoo', start, end).Close
     merged = pd.merge(df, SP500, left_index=True, right_index=True)
-    df = df.iloc[:,:-1].div(merged.sp500, axis=0)
+    df = df.iloc[:,:-1].div(merged['sp500'], axis=0)
 
     a = df.shift(shift)
     self.returns = a / df

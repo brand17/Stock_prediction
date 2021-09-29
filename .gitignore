@@ -47,3 +47,6 @@ data_/
 *.npz
 *.docx
 *.log
+download_from_CC/
+SESTM/
+transformer/
