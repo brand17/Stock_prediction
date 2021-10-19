@@ -1,9 +1,14 @@
-from math import sqrt
+if 'kaggle' in globals():
+  cloud = 'kaggle'
+elif 'colab' in globals():
+  cloud = 'colab'
+else:
+  cloud = ''
+# from math import sqrt
 import pickle
 from dateutil.relativedelta import relativedelta
 import tensorflow as tf
 import os
-# from datetime import datetime
 
 from tensorflow.python.ops.gen_math_ops import rsqrt
 from market_data import market_data
@@ -31,11 +36,11 @@ from utils import time_range
 class cloud_path_initialilzer():
   def __init__(self, path_to_model, cloud=''):
     if cloud  == 'kaggle':
-      self.path_to_dataset = '/kaggle/input/securities-dataset/'
-      self.path_to_saved_model = '/kaggle/input/securities-transf-saved-model/' #+ path_to_model
-      self.output_path = '/kaggle/working/'# + path_to_model
+      self.path_to_dataset = '/kaggle/input/securities-dataset-by-dates/'
+      self.path_to_saved_model = '/kaggle/input/securities-transf-saved-model-new/' + path_to_model
+      self.output_path = '/kaggle/working/' + path_to_model
       self.path_to_market_data = '/kaggle/input/market-data/'
-      self.path_to_validation = '/kaggle/input/securities-transf-validation/' + path_to_model
+      self.path_to_validation = self.path_to_saved_model #'/kaggle/input/securities-transf-validation/' + path_to_model
       #path_to_embedding_model = '/kaggle/input/poetry-supervised-embedding-model/'
     else:
       path = ''
@@ -95,19 +100,19 @@ class test_securities(cloud_path_initialilzer):
     df = df.groupby(['articleID', 'comp_short', 'publ_date']).mean()
     return df
 
-  def load_market_data(self):
-    import pandas as pd
-    file_name = self.path_to_market_data + 'market_data.parquet'
-    if not os.path.isfile(file_name):
-      print('No market_data.parquet found !!! Create on CPU')
-      md = pd.read_excel(self.path_to_market_data + 'market_data.xlsx', engine='openpyxl')
-      md = md[pd.notnull(md["A"])]
-      md.Date = md.Date.dt.date
-      md.set_index('Date', inplace=True)
-      md.to_parquet(file_name, compression='gzip')
-    else:
-      md = pd.read_parquet(file_name)
-    return md
+  # def load_market_data(self):
+  #   import pandas as pd
+  #   file_name = self.path_to_market_data + 'market_data.parquet'
+  #   if not os.path.isfile(file_name):
+  #     print('No market_data.parquet found !!! Create on CPU')
+  #     md = pd.read_excel(self.path_to_market_data + 'market_data.xlsx', engine='openpyxl')
+  #     md = md[pd.notnull(md["A"])]
+  #     md.Date = md.Date.dt.date
+  #     md.set_index('Date', inplace=True)
+  #     md.to_parquet(file_name, compression='gzip')
+  #   else:
+  #     md = pd.read_parquet(file_name)
+  #   return md
 
   def test_strategy(self, holding_period, sample_size=1, short_pos_adj=1, lag=0):
     # for name, group in grouped:
@@ -121,11 +126,13 @@ class test_securities(cloud_path_initialilzer):
       else:
         return ret - 1
     import numpy as np
-    self.df['abs_ret'] = np.vectorize(get_abs_ret)(self.df.prediction, short_pos_adj)
+    # self.df['abs_ret'] = np.vectorize(get_abs_ret)(self.df.prediction, short_pos_adj)
+    self.df['abs_ret'] = self.df.prediction
     inds = self.df['abs_ret'].groupby('publ_date', group_keys=False).nlargest(sample_size).index
+    # inds = self.df.prediction.groupby('publ_date', group_keys=False).nlargest(sample_size).index
     rets_full = self.df.loc[inds]
     # rets_full = df.loc[df.groupby('publ_date')['abs_ret'].idxmax()]
-    rets_full = [(d, c, r.prediction, r.abs_ret) for (d, c), r in rets_full.iterrows()]
+    rets_full = [(pd.Timestamp(d), c, r.prediction, r.abs_ret) for (d, c), r in rets_full.iterrows()]
 
     res = []
     for i in range(sample_size):
@@ -136,6 +143,7 @@ class test_securities(cloud_path_initialilzer):
 
   def test_sample(self, rets, holding_period, lag):
     rets += [(rets[-1][0] + relativedelta(days=1), 'A', 1., 0.)]
+    # a = rets[0][0] in self.md.index
     quotes = [i[0] in self.md.index for i in rets]
     best = None
     hp_counter = 1
@@ -162,7 +170,7 @@ class test_securities(cloud_path_initialilzer):
           f.write(str(next[0]) + '\t' + str(cash) + '\t' + str(invested['comp']) + '\t' + str(invested['quantity']) + '\n')
         quote = self.md.loc[next[0], best[1]]
         quantity = cash // quote
-        if best[2] < 1:
+        if False:#best[2] < 1:
           quantity = -quantity
         invested = {'comp': best[1], 'quantity': quantity, 'ret':best[3], 'quote': quote}
         hp_counter = holding_period
@@ -172,12 +180,21 @@ class test_securities(cloud_path_initialilzer):
   def test(self):
     if os.path.exists(self.path_to_saved_model + 'saved.h5'):
       path_test_with_ret = self.output_path + 'test_return_forecast.txt'
-      self.md = self.load_market_data()
-      df = self.load_data(path_test_with_ret)
-      self.df = df.groupby(['publ_date', 'comp_short']).mean()
+      from market_data import load_market_data
+      self.md = load_market_data(
+        self.path_to_market_data + 'market_data.parquet',
+        self.path_to_market_data + 'market_data.xlsx',
+        #self.path_to_market_data + 'sp500.xlsx'
+      )
+      articles_avg = self.load_data(path_test_with_ret)
+      comps_avg = articles_avg.groupby(['comp_short']).mean() 
+      best = comps_avg.loc[comps_avg['prediction'].idxmax()].name
+      print('the best company -', best)
+      comps_avg.to_excel(self.output_path + 'output.xlsx', sheet_name="Sheet1", engine='openpyxl')
+      self.df = articles_avg.groupby(['publ_date', 'comp_short']).mean()
 
       # a = test_sample(rets_full, 3, 0)
-      a = self.test_strategy(1, 1, 1)
+      a = self.test_strategy(1, 40, 1)
     else:
       print(self.path_to_saved_model + 'saved.h5', 'not found')
             
@@ -197,18 +214,11 @@ class test_securities(cloud_path_initialilzer):
     self.model.load_weights(self.path_to_saved_model + 'saved.h5')
 
   def init_dataset(self, dev='CPU', nsteps=10):
-    # train_range, test_range = self.set_date_ranges()
     self.dataset = stock_data(
-      self, nsteps, #self.train_range, self.test_range,
+      self, nsteps,
       device=dev, 
-      # model_name=self.pretrained_model_name
+      #companies=set(['MS'])
       )
-
-  # def get_train_range(self, test_range):
-  #   # test_range = time_range(datetime(2021, 1, 14), datetime(2021, 1, 15))
-  #   train_range = time_range(test_range.end, test_range.end + relativedelta(months=1))
-  #   # train_range = time_range(last_date - relativedelta(months=1) + relativedelta(days=1), last_date)
-  #   return train_range#, test_range
 
 class stock(test_securities):
   def load_embeddings(self):
@@ -318,19 +328,20 @@ class stock(test_securities):
     firstIter = trainParameters['iter']
     start = time.time()
     print('training started...')
-    min_tr_loss = 0.007
+    min_tr_loss = 0.0014
     min_eval_loss = 0.00091
     for _ in range(1):
       for i, data in zip(
-        range(firstIter, 1000000, nsteps), 
-        self.dataset.next(verbose=1, roundup=True)
+        range(firstIter, 176, nsteps), 
+        self.dataset.next(verbose=1, roundup=True, max_batches_per_file=8)
         ):
-        if i > 176:
-          return
+        # if i > 176:
+        #   return
         batch_size = tf.cast(data._batch_size, tf.float32)
         data = strategy.experimental_distribute_dataset(data)
         training_loss.reset_states()
         for input, labels in data:
+          # continue
           # print('step')
           # step_fn(input, labels)
           strategy.run(step_fn, args=(input, labels))
@@ -585,28 +596,84 @@ def group_companies():
   # for c in comps:
   #   print(c)
 
-path_to_working_days = ''
-if 'kaggle' in globals():
-  cloud = 'kaggle'
-  path_to_working_days = '/kaggle/input/working-days/'
-elif 'colab' in globals():
-  cloud = 'colab'
-else:
-  cloud = ''
-df = pd.read_excel(
-  path_to_working_days + 'analysis_net_of_index_best_eval_loss.xlsx', 
-  sheet_name='work days sample', 
-  header=0,
-  engine='openpyxl'
-  )
-i = 83
-j = i + 1
-for eval_start, train_start, test_start, test_end in zip(df.eval_start.dt.date[i:j], df.train_start.dt.date[i:j], df.test_start.dt.date[i:j], df.test_end.dt.date[i:j]):
-  print('!!!!!! processing training period started on ', train_start)
-  s = stock_convbert(time_range(eval_start, train_start), time_range(train_start, test_start), cloud)
-  # s.init_dataset()
-  # s.dataset.prepare_for_training()
-  s.train()
-  # stock_convbert(time_range(test_start), time_range(train_start, test_start), cloud).test()
+def train_sample():
+  i = 6
+  j = 1
+  path_to_working_days = ''
+  if 'kaggle' in globals():
+    path_to_working_days = '/kaggle/input/working-days/'
+  df = pd.read_excel(
+    path_to_working_days + 'analysis_net_of_index_best_eval_loss.xlsx', 
+    sheet_name='work days sample', 
+    header=0,
+    engine='openpyxl'
+    )
+  for eval_start in df.eval_start.dt.date[i:i + j]:
+    wdi_eval = df.index[df.eval_start_sorted.dt.date == eval_start]
+    try:
+      eval_end, train_start, train_end, test_start, test_end = \
+        df.eval_start_sorted.dt.date.iloc[wdi_eval + 1].values[0], \
+        df.eval_start_sorted.dt.date.iloc[wdi_eval + 2].values[0], \
+        df.eval_start_sorted.dt.date.iloc[wdi_eval + 24].values[0], \
+        df.eval_start_sorted.dt.date.iloc[wdi_eval + 25].values[0], \
+        df.eval_start_sorted.dt.date.iloc[wdi_eval + 31].values[0]
+    except:
+      continue
+    print(eval_start, eval_end, train_start, train_end, test_start, test_end)
+    s = stock_convbert(time_range(eval_start, eval_end), time_range(train_start, train_end), cloud)
+    # s.init_dataset()
+    # s.dataset.prepare_for_training()
+    s.train()
+    # stock_convbert(time_range(test_start, test_end), time_range(train_start, train_end), cloud).test()
+    pass
+
+def daily_prepare_for_training():
+  s = get_daily_trainer()
+  s.init_dataset()
+  s.dataset.prepare_for_training()
   pass
+
+def daily_train():
+  s = get_daily_trainer()
+  s.train()
+  pass
+
+def get_daily_trainer():
+    df = load_work_days()
+    eval_start, eval_end, train_start, train_end = \
+    df.DATE.dt.date.iloc[-25], \
+    df.DATE.dt.date.iloc[-24], \
+    df.DATE.dt.date.iloc[-23], \
+    df.DATE.dt.date.iloc[-1]
+    s = stock_convbert(time_range(eval_start, eval_end), time_range(train_start, train_end), cloud)
+    return s
+
+def load_work_days():
+    path_to_working_days = '../data/'
+    if 'kaggle' in globals():
+      path_to_working_days = '/kaggle/input/market-data/'
+    df = pd.read_excel(
+      path_to_working_days + 'sp_500.xlsx', 
+      header=0,
+      engine='openpyxl'
+    )
+    return df
+
+def daily_test():
+  df = load_work_days()
+  test_start, test_end, train_start, train_end = \
+  df.DATE.dt.date.iloc[-1], \
+  None, \
+  df.DATE.dt.date.iloc[-23], \
+  df.DATE.dt.date.iloc[-1]
+  stock_convbert(time_range(test_start, test_end), time_range(train_start, train_end), cloud).test()
+
+# daily_prepare_for_training()
+# daily_train()
+# daily_test()
+train_sample()
+# import subprocess
+# subprocess.run(
+#   ['kaggle', 'dataset', 'version', '-p', '' 
+#   '--recursive'], check=True)
 pass

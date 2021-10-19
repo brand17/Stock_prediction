@@ -4,70 +4,96 @@ import tensorflow as tf
 import tqdm, os, re
 import pandas as pd
 from pathlib import Path
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 class stock_data_it():
-  def __init__(self, path_to_market_data, path_to_dataset):
+  def __init__(self, path_to_market_data, path_to_dataset, companies=None):
     self.path_to_dataset = path_to_dataset
+    self.companies = companies
     from market_data import market_data
     self.md = market_data(
       path_to_market_data + 'market_data.xlsx', 
-      path_to_market_data + 'sp500.xlsx'
+      #path_to_market_data + 'sp500.xlsx'
       )
+    self.batch_counter = 0
 
-  def files_it(self, verbose=0):
+  def files_it(self, r, verbose=0):
     # pathlist = Path(self.path_to_dataset).glob('*.parquet')
-    pathlist = list(self.get_path_list())
+    pathlist = list(self.get_path_list(r))
     # from utils import GetFolderSize
     #errorRegex=re.compile(r'\s[^авикосуя]\s[^авикосуя]\s|(\s|\A)[^аеёиоуыэюя][^аеёиоуыэюя]+(\s|\Z)')
     # with tqdm.tqdm(total=GetFolderSize(p)) as pbar:
     # from random import shuffle
     # shuffle(pathlist)
-    for path in sorted(pathlist):
+    for path in sorted(pathlist, reverse=True):
       if verbose == 1:
         print(path)
       yield path
 
-  def get_path_list(self):
+  def get_path_list(self, r):
     pathlist = Path(self.path_to_dataset).glob('*.parquet')
+    pathlist = self.filter_pathlist_by_range(r, pathlist)
+    return pathlist
+
+  def filter_pathlist_by_range(self, r, pathlist):
+    if r is not None:
+      if r.start is not None:
+        pathlist = [p for p in pathlist \
+        if datetime.strptime(p.stem, '%Y-%m-%d').date() >= r.start]
+      if r.end is not None:
+        pathlist = [p for p in pathlist \
+        if datetime.strptime(p.stem, '%Y-%m-%d').date() < r.end]
     return pathlist
 
   def articles_it(self, r=None):
-    for path in self.files_it():
+    for path in self.files_it(r):
       for a in self.articles_it_in_file(path, r):
         yield a
 
   def dataframe_from_file(self, path, r):
     table = pd.read_parquet(path)
-    table = table[(table['return'].notnull())]
-    if r is not None:
-      if r.start is not None:
-        table = table[table.publ_time.dt.date >= r.start]
-      if r.end is not None:
-        table = table[table.publ_time.dt.date < r.end]
+    # table = table[(table['return'].notnull())]
+    # if r is not None:
+    #   if r.start is not None:
+    #     table = table[table.publ_time.dt.date >= r.start]
+    #   if r.end is not None:
+    #     table = table[table.publ_time.dt.date < r.end]
+    if self.companies is not None:
+      table = table[self.companies]
+      pass
     if len(table.index) > 0:
-      publ_date = (table.publ_time - timedelta(hours=40)).dt.date
+      # publ_date = (
+      #   table.publ_time - timedelta(hours=4) - timedelta(days=1.5)
+      #   ).dt.date
+      publ_date = (
+        table.publ_time + timedelta(days=1)
+        ).dt.date
       li = self.md.returns.index.get_indexer(publ_date)
       ri = self.md.returns.columns.get_indexer(table.comp_short)
       table['return'] = self.md.returns.values[li, ri]
+      assert len(table['return'][table['return'].isnull()]) == 0, 'no market data!!! for ' + str(path)
     return table
 
   def articles_it_in_dataframe(self, table):
-    for text, s, publ_time, comp_short in zip(table.content, table['return'], table.publ_time, table.comp_short):
-      text = self.string_from_file(text)
-      yield text, s, publ_time, comp_short
+    if 'return' in table.columns:
+      for text, s, publ_time, comp_short in zip(table.content, table['return'], table.publ_time, table.comp_short):
+        text = self.string_from_file(text)
+        yield text, s, publ_time, comp_short
 
   def articles_it_in_file(self, path, r=None):
     table = self.dataframe_from_file(path, r)
     for article in self.articles_it_in_dataframe(table):
       yield article
 
-  def sentences_it(self, r, roundup=True, verbose=0):
+  def sentences_it(self, r, roundup=True, verbose=0, max_batches_per_file=None):
     while True:
-      for path in self.files_it(verbose):
+      for path in self.files_it(r, verbose):
         for articleID, article in enumerate(self.articles_it_in_file(path, r)):
           for sent in article[0]:
             yield (sent,) + article[1:] + (articleID,)
+          if max_batches_per_file is not None and self.batch_counter >= max_batches_per_file:
+            self.batch_counter = 0
+            break
       if not roundup:
         break
 
@@ -96,7 +122,8 @@ class stock_data_it():
 
 class stock_data(stock_data_it):
   def __init__(self, trainer, nsteps, tokenizer=None,
-               device='CPU'):
+               device='CPU', companies=None):
+    super().__init__(trainer.path_to_market_data, trainer.path_to_dataset, companies)
     # print('initializing dataset ' + file_name)
     self.lengths = [8, 16, 24, 32, 40, 48, 64, 80, 128, 256, 512]
     self.nsteps = nsteps
@@ -114,11 +141,11 @@ class stock_data(stock_data_it):
     # else:
     #   self.comps = word2ind()
 
-    from market_data import market_data
-    self.md = market_data(
-      trainer.path_to_market_data + 'market_data.xlsx', 
-      trainer.path_to_market_data + 'sp500.xlsx'
-      )
+    # from market_data import market_data
+    # self.md = market_data(
+    #   trainer.path_to_market_data + 'market_data.xlsx', 
+    #   trainer.path_to_market_data + 'sp500.xlsx'
+    #   )
 
     if tokenizer is None:
       self.tok = self.custom_tokenizer()
@@ -143,12 +170,15 @@ class stock_data(stock_data_it):
     # from transformers.models.auto.tokenization_auto import tokenizer_class_from_name
     file_name = self.trainer.path_to_validation + 'tokenizer.json'
     if not os.path.exists(file_name):
+      print('file not found:', file_name)
       assert self.device == 'CPU', 'No tokenizer found !!! Train on CPU'
       tokenizer = Tokenizer(BPE()) 
       tokenizer.pre_tokenizer = Whitespace()
       from tokenizers.processors import BertProcessing
       tokenizer.post_processor = BertProcessing(sep=("[EOS]", 2), cls=("[BOS]", 0))
       trainer = trainers.BpeTrainer(special_tokens=["[BOS]", "[PAD]", "[EOS]", "[UNK]", '[MASK]'])
+      # for s in self.sentences_it_text_only(self.trainer.train_range, verbose=1):
+      #   pass
       tokenizer.train_from_iterator(self.sentences_it_text_only(self.trainer.train_range, verbose=1), trainer)
       tokenizer.save(file_name)
 
@@ -175,8 +205,9 @@ class stock_data(stock_data_it):
 
   #   print(time() - start)
 
-  def get_path_list(self):
-    pathlist = Path(self.trainer.path_to_dataset).glob('part-00294*.parquet')
+  def get_path_list(self, r):
+    pathlist = Path(self.trainer.path_to_dataset).glob('*.parquet')
+    pathlist = self.filter_pathlist_by_range(r, pathlist)
     return pathlist
 
   def prepare_for_training(self):
@@ -216,8 +247,8 @@ class stock_data(stock_data_it):
       'scores': [], 'comp_short': [], 'articleID': []
       }
     
-  def load_batch(self, r, k=None, batch_size=None, roundup=True, verbose=0):
-    for sent in self.sentences_it(r, roundup, verbose):
+  def load_batch(self, r, k=None, batch_size=None, roundup=True, verbose=0, max_batches_per_file=None):
+    for sent in self.sentences_it(r, roundup, verbose, max_batches_per_file):
       length = self.process_sentence(sent)
       if length is not None:
         if k is not None and length != k:
@@ -233,6 +264,7 @@ class stock_data(stock_data_it):
         yield self.batch_from_bucket(l)
 
   def batch_from_bucket(self, length):
+    self.batch_counter += 1
     res = self.buckets[length]
     self.init_bucket(length)
     return np.array(res['input_ids'], dtype=np.int32), \
@@ -245,7 +277,7 @@ class stock_data(stock_data_it):
     file_name = self.trainer.path_to_validation + 'validation_data.pkl'
     if not os.path.isfile(file_name):
       assert self.device == 'CPU', 'No validation file found !!! Run on CPU to create (is slow on colab TPU)'
-      pathlist = list(self.get_path_list()) # list(Path(self.path_to_dataset).glob('*.parquet'))
+      pathlist = list(self.get_path_list(r)) # list(Path(self.path_to_dataset).glob('*.parquet'))
       file_probabilities = [v.stat().st_size for v in pathlist]
       import random
       sample = random.choices(pathlist, file_probabilities, k=5000)
@@ -294,8 +326,9 @@ class stock_data(stock_data_it):
     #   sentences = self.dataset_from_target(sentences[:2], drop_remainder=True)
     return sentences
 
-  def next(self, verbose=0, roundup=True):
-    for b in self.load_batch(self.trainer.train_range, verbose=verbose, roundup=roundup):
+  def next(self, verbose=0, roundup=True, max_batches_per_file=None):
+    for b in self.load_batch(self.trainer.train_range, verbose=verbose, 
+      roundup=roundup, max_batches_per_file=max_batches_per_file):
       sentences = self.dataset_from_target(b[:2], drop_remainder=True)
       yield sentences
   
