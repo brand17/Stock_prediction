@@ -27,7 +27,7 @@ def update_market_data(path2market_data):
     (datetime.today() - relativedelta(days=40)).date()
     )
   start_date = '2021-06-01'
-  new_df = download_all_since(start_date)
+  new_df = download_all_since(start_date)["Adj Close"]
   new_df = append_SP500(new_df)
   # df_yfinance.to_parquet(path2market_data)
   # merged = df.append(new_df)
@@ -75,7 +75,7 @@ def download_all_since(start_date):
       all_comps += [idx]
     all_comps = " ".join(all_comps)
     import yfinance as yf
-    df_yfinance =  yf.download(all_comps, start=start_date)["Adj Close"]
+    df_yfinance =  yf.download(all_comps, start=start_date)#["Adj Close"]
     return df_yfinance
 
 def load_market_data(parquet_file_name, path_to_market_data):
@@ -90,7 +90,7 @@ def load_market_data(parquet_file_name, path_to_market_data):
       # all_comps = " ".join(all_comps)
       # import yfinance as yf
       # df =  yf.download(all_comps, start="2016-08-01")["Adj Close"]
-      df = download_all_since("2016-08-01")
+      df = download_all_since("2016-08-01")["Adj Close"]
       df.to_excel(path_to_market_data, sheet_name="Sheet1", engine='openpyxl')
     else:
       df = pd.read_excel(path_to_market_data, engine='openpyxl')
@@ -106,6 +106,7 @@ def load_market_data(parquet_file_name, path_to_market_data):
     df.to_parquet(parquet_file_name, compression='gzip')
   else:
     df = pd.read_parquet(parquet_file_name)
+  # df.index = df.index.date
   return df
 
 def update_sp500(path_sp500):
@@ -120,22 +121,38 @@ def update_sp500(path_sp500):
   # df.to_parquet('../data/sp500.parquet')
   df.to_excel(path_sp500, sheet_name="Sheet1", engine='openpyxl')
 
+def get_spreads(dir_name):
+    spread_file_name = dir_name + '/spreads.xlsx'
+    if not os.path.isfile(spread_file_name):
+      from TWS_API import get_spreads
+      spreads = get_spreads()
+      spreads.to_excel(spread_file_name)  
+    else:
+      spreads = pd.read_excel(spread_file_name, index_col=0, engine='openpyxl')
+    return spreads
+
 class market_data():
   def __init__(
     self, 
     path_to_market_data="../data/market_data.xlsx", 
     #path_to_sp500="../sp500.xlsx", 
-    shift=1
+    shift=-1
     ):
     # path_to_market_data = "../data/market_data.xlsx"
-    parquet_file_name = os.path.dirname(os.path.abspath(path_to_market_data)) + '/market_data.parquet'
+    dir_name = os.path.dirname(os.path.abspath(path_to_market_data))
+    parquet_file_name = dir_name + '/market_data.parquet'
     df = load_market_data(parquet_file_name, path_to_market_data)
 
     # df.to_excel('df_with_sp500.xlsx', sheet_name="Sheet1", engine='openpyxl')
+    numerator = df.shift(shift) #- 0.001 # broker's fee
+    numerator = numerator.iloc[:,:-1].div(numerator['sp500'], axis=0)
     df = df.iloc[:,:-1].div(df['sp500'], axis=0)
 
-    a = df.shift(shift)
-    self.returns = df / a # current date divided by the prior date
+    # a = df.shift(shift)
+    # self.returns = a / df # next date divided by the current date
+    self.returns = numerator / df
+    # spreads = get_spreads(dir_name)
+    # self.returns = self.returns - spreads.spreads
     mn = self.returns.mean(axis=1)
     self.returns = self.returns.subtract(mn, axis='rows')
 
@@ -185,6 +202,18 @@ class market_data():
 
   # def get_return(self, ticket, date):
   #   return self.get_adj_close(ticket, date + timedelta(days=2)) / self.get_adj_close(ticket, date - timedelta(days=2))
+
+class title_checker():
+  def __init__(self):
+    df = load_sp500()
+    self.symb2issuer = dict(zip(df.Symbol, df.Issuer))
+
+  import re
+  def check_title(self, title):
+    m = self.re.findall("\:(\w*)\)", title)
+    if len(m) == 1 and m[0] in self.symb2issuer:#re.search(ticker_pattern, title) == None:
+      return m[0], self.symb2issuer[m[0]]
+    return None, None # not found in title
 
 if __name__ == '__main__':
   # market_data()
