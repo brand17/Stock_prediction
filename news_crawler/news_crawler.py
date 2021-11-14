@@ -136,32 +136,34 @@ async def main():
     while True:
       for root_url, last_url in last_access.items():
         print('processing', root_url)
-        r = requests.get(root_url)
-        article_urls = goose.extract(raw_html=r.content).links
-        article_urls = list(OrderedDict.fromkeys(article_urls))
-        if last_url != None:
-          try:
-            article_urls = article_urls[:article_urls.index(last_url)]
-          except ValueError:
-            print('articles missed on', root_url) 
+        async with session.get(root_url) as r:
+          content = await r.text()
+          # r = requests.get(root_url)
+          article_urls = goose.extract(raw_html=content).links
+          article_urls = list(OrderedDict.fromkeys(article_urls))
+          if last_url != None:
+            try:
+              article_urls = article_urls[:article_urls.index(last_url)]
+            except ValueError:
+              print('articles missed on', root_url) 
 
-        # if url != last_url and last_url != None:
-        #   print('articles missed on', root_url) 
-        #   pass
-        if len(article_urls) > 0:
-          df = []
-          tasks = tuple(asyncio.create_task(process_links(url, session)) for url in article_urls)
-          # for url in article_urls:
-          #   process_links(url)
-          L = await asyncio.gather(*tasks)
-          df = [l for l in L if l is not None]
-          last_url = article_urls[0]
-          if len(df) > 0:
-            cur.executemany("insert into news values (?, ?, ?, ?, ?, ?, ?)", df)
-          cur.execute('update last_access set url = ? where root_url = ?', (last_url, root_url))
-          con.commit()
-          last_access[root_url] = last_url
-          # add_news(df)
+          # if url != last_url and last_url != None:
+          #   print('articles missed on', root_url) 
+          #   pass
+          if len(article_urls) > 0:
+            df = []
+            tasks = tuple(asyncio.create_task(process_links(url, session)) for url in article_urls)
+            # for url in article_urls:
+            #   process_links(url)
+            L = await asyncio.gather(*tasks)
+            df = [l for l in L if l is not None]
+            last_url = article_urls[0]
+            if len(df) > 0:
+              cur.executemany("insert into news values (?, ?, ?, ?, ?, ?, ?)", df)
+            cur.execute('update last_access set url = ? where root_url = ?', (last_url, root_url))
+            con.commit()
+            last_access[root_url] = last_url
+            # add_news(df)
 
 asyncio.run(main())
   # df = pa.Table.from_pandas(df)
