@@ -10,7 +10,6 @@ from dateutil.relativedelta import relativedelta
 import tensorflow as tf
 import os
 
-from tensorflow.python.ops.gen_math_ops import rsqrt
 from market_data import market_data
 
 from tf_utils import get_strategy, CustomSchedule, create_logger
@@ -21,6 +20,8 @@ print(transformers.__version__)
 from transformers import TFRobertaForSequenceClassification, RobertaConfig
 import pandas as pd
 
+# from scipy.stats import spearmanr
+
 d_model = 32
 dummy_input = (
   tf.random.uniform([8, 8], 0, 100, dtype=tf.int32),
@@ -28,7 +29,6 @@ dummy_input = (
   )
 from stock_data import stock_data
 from utils import time_range
-# from stock_model import Transformer
 
 # def to_matrix(l, n):
 #   return [l[i:i+n] for i in range(0, len(l), n)]
@@ -40,23 +40,18 @@ class cloud_path_initialilzer():
       self.path_to_saved_model = '/kaggle/input/securities-transf-saved-model-new/' + path_to_model
       self.output_path = '/kaggle/working/' + path_to_model
       self.path_to_market_data = '/kaggle/input/market-data/'
-      self.path_to_validation = self.path_to_saved_model #'/kaggle/input/securities-transf-validation/' + path_to_model
-      #path_to_embedding_model = '/kaggle/input/poetry-supervised-embedding-model/'
+      # self.path_to_validation = self.path_to_saved_model
+      self.path_to_validation = '/kaggle/input/securities-transf-validation/' + path_to_model
     else:
       path = ''
-      # if cloud == 'colab':
-      #   path = '/content/drive/My_Drive/Colab_Notebooks/Accounting/'
-        # if device == 'TPU':
-        #   assert tf.__version__[:3] == '2.2'
-      # config = str(d_model) + '/' #'128-512/'
       self.path_to_dataset = "../download_from_CC/result" #path + 'data/'
       self.path_to_saved_model = path + 'saved/' + path_to_model
       self.output_path = path + 'saved/' + path_to_model
+      # self.output_path = 'test_outputs/gross/' + path_to_model
       self.path_to_market_data = path + '../data/'
       self.path_to_validation = path + 'saved/' + path_to_model
     from pathlib import Path
     Path(self.output_path).mkdir(parents=True, exist_ok=True)
-      #path_to_embedding_model = path + '../../embeddings/saved/' + config
 
 class test_securities(cloud_path_initialilzer):
   pretrained_model_name = 'roberta-base'
@@ -65,6 +60,11 @@ class test_securities(cloud_path_initialilzer):
     self.train_range, self.test_range = train_range, test_range
 
   def load_data(self, path_test_with_ret):
+    # @tf.function()
+    # def get_y_pred(i):
+    #   output = self.model(i).logits
+    #   return output
+
     from utils import check_file
     if check_file(path_test_with_ret):
       strategy, dev = get_strategy()
@@ -78,9 +78,21 @@ class test_securities(cloud_path_initialilzer):
         with open(path_test_with_ret, 'w') as f:
           from time import time
           start = time()
-          for sentence in self.dataset.load_batch(self.test_range, verbose=1, roundup=False):
+          it = self.dataset.sentences_it(self.test_range, verbose=1, roundup=False)
+          for sentence in self.dataset.load_batch(it):
             data = self.dataset.dataset_from_target(sentence[:1])
             data = strategy.experimental_distribute_dataset(data)
+            # y_pred = []
+            # for i in data:
+            #   # per_replica_result = get_y_pred(i)
+            #   per_replica_result = strategy.run(get_y_pred, args=(i,))
+            #   try:
+            #     per_replica_result = per_replica_result.values
+            #   except AttributeError:
+            #     pass
+            #   y_pred.append(per_replica_result)
+            # prediction = tf.concat(y_pred, 0)
+            # prediction = tf.reshape(y_pred, [-1, 1])
             prediction = self.model.predict(data, verbose=0).logits # not working with TPU
             for s in zip(*sentence, prediction):
               f.write(str(s[4]) + '\t' + s[3] + '\t' + str(s[2]) + '\t' + str(s[1]) + '\t' + str(s[5][0]) + '\n')
@@ -96,117 +108,113 @@ class test_securities(cloud_path_initialilzer):
       names=['articleID', 'comp_short', 'publ_time', 'score', 'prediction'],
       parse_dates=[2]
       )
-    df['publ_date'] = df.publ_time.dt.date
+    df['publ_date'] = df.publ_time.dt.floor('d')
+    # df = df.set_index('publ_time').between_time('00:00', '12:00')
     df = df.groupby(['articleID', 'comp_short', 'publ_date']).mean()
     return df
 
-  # def load_market_data(self):
-  #   import pandas as pd
-  #   file_name = self.path_to_market_data + 'market_data.parquet'
-  #   if not os.path.isfile(file_name):
-  #     print('No market_data.parquet found !!! Create on CPU')
-  #     md = pd.read_excel(self.path_to_market_data + 'market_data.xlsx', engine='openpyxl')
-  #     md = md[pd.notnull(md["A"])]
-  #     md.Date = md.Date.dt.date
-  #     md.set_index('Date', inplace=True)
-  #     md.to_parquet(file_name, compression='gzip')
-  #   else:
-  #     md = pd.read_parquet(file_name)
-  #   return md
+  # def test_strategy(self, sample_size=1, sign=1):
+  #   self.df.prediction *= sign
+  #   inds = self.df.prediction.groupby('publ_date', group_keys=False).nlargest(sample_size).index
+  #   rets_full = self.df.loc[inds]
+  #   rets_full = [(pd.Timestamp(d), c, r.prediction) for (d, c), r in rets_full.iterrows()]
+  #   res = []
+  #   for i in range(sample_size):
+  #     rets = rets_full[i::sample_size]
+  #     cash = self.test_sample(rets, sign)
+  #     res += [cash]
+  #   return sum(res) / len(res)
 
-  def test_strategy(self, holding_period, sample_size=1, short_pos_adj=1, lag=0):
-    # for name, group in grouped:
-    #   group = group.groupby('comp_short').agg('mean')
-    # day_means = [group.groupby('comp_short').agg('mean') for name, group in grouped]
-    # rets_full = [group.iloc[group.ret.argmax()] for name, group in day_means]
-    def get_abs_ret(ret, adj):
-      # ret = ret['ret']
-      if ret < 1:
-        return adj * (1 - ret)
-      else:
-        return ret - 1
-    import numpy as np
-    # self.df['abs_ret'] = np.vectorize(get_abs_ret)(self.df.prediction, short_pos_adj)
-    self.df['abs_ret'] = self.df.prediction
-    inds = self.df['abs_ret'].groupby('publ_date', group_keys=False).nlargest(sample_size).index
-    # inds = self.df.prediction.groupby('publ_date', group_keys=False).nlargest(sample_size).index
-    rets_full = self.df.loc[inds]
-    # rets_full = df.loc[df.groupby('publ_date')['abs_ret'].idxmax()]
-    rets_full = [(pd.Timestamp(d), c, r.prediction, r.abs_ret) for (d, c), r in rets_full.iterrows()]
-
-    res = []
-    for i in range(sample_size):
-      rets = rets_full[i::sample_size]
-      cash = self.test_sample(rets, holding_period, lag)
-      res += [cash]
-    return sum(res) / len(res)
-
-  def test_sample(self, rets, holding_period, lag):
-    rets += [(rets[-1][0] + relativedelta(days=1), 'A', 1., 0.)]
-    # a = rets[0][0] in self.md.index
-    quotes = [i[0] in self.md.index for i in rets]
-    best = None
-    hp_counter = 1
-    last = len(rets) - lag
-    cash = 100000
-    invested = {'comp': 'A', 'quantity': 0, 'ret': 0, 'quote': 1}
-    for prev, next, q in zip(rets[:last], rets[lag:], quotes[lag:]):
-      hp_counter -= 1
-      if best is None or prev[3] > best[3]:
-        best = prev
-      if not q:
-        continue
-      try:
-        ret = self.df.loc[next[0], invested['comp']].abs_ret
-        invested['ret'] = ret
-      except KeyError:
-        pass
-      if best[3] > invested['ret']:
-        hp_counter = 0
-      if hp_counter <= 0:
-        quote = self.md.loc[next[0], invested['comp']]
-        cash += (quote - invested['quote']) * invested['quantity']
-        with open(self.output_path + '../output.txt', 'a') as f:
-          f.write(str(next[0]) + '\t' + str(cash) + '\t' + str(invested['comp']) + '\t' + str(invested['quantity']) + '\n')
-        quote = self.md.loc[next[0], best[1]]
-        quantity = cash // quote
-        if False:#best[2] < 1:
-          quantity = -quantity
-        invested = {'comp': best[1], 'quantity': quantity, 'ret':best[3], 'quote': quote}
-        hp_counter = holding_period
-        best = None
-    return cash
+  # def test_sample(self, rets, sign=1):
+  # # !!! error here - saturday-monday averaged instead of friday-sunday
+  #   rets += [(rets[-1][0] + relativedelta(days=1), 'A', 1.)]
+  #   work_days = [i[0] in self.quotes.index for i in rets]
+  #   best = None
+  #   cash = 100000
+  #   invested = {'comp': 'A', 'quantity': 0, 'quote': 1}
+  #   for comp2buy, wd in zip(rets, work_days):
+  #     if best is None or comp2buy[2] > best[2]:
+  #       best = comp2buy
+  #     if not wd:
+  #       continue
+  #     quote = self.quotes.loc[comp2buy[0], invested['comp']]
+  #     cash += (quote - invested['quote']) * invested['quantity']
+  #     with open(self.output_path + '../output.txt', 'a') as f:
+  #       f.write(str(comp2buy[0]) + '\t' + str(cash) + '\t' + str(invested['comp']) + '\t' + str(invested['quantity']) + '\n')
+  #     quote = self.quotes.loc[comp2buy[0], best[1]]
+  #     quantity = sign * cash // quote
+  #     invested = {'comp': best[1], 'quantity': quantity, 'quote': quote}
+  #     best = None
+  #   return cash
 
   def test(self):
-    if os.path.exists(self.path_to_saved_model + 'saved.h5'):
+    if True:#os.path.exists(self.path_to_saved_model + 'saved.h5'):
       path_test_with_ret = self.output_path + 'test_return_forecast.txt'
-      from market_data import load_market_data
-      self.md = load_market_data(
+      from market_data import load_market_data, get_spreads
+      self.quotes = load_market_data(
         self.path_to_market_data + 'market_data.parquet',
         self.path_to_market_data + 'market_data.xlsx',
-        #self.path_to_market_data + 'sp500.xlsx'
       )
+      self.quotes = self.quotes.stack().to_frame('quote')
+      self.quotes['next_day_quote'] = self.quotes.groupby(level=1)['quote'].shift(-1)
+      self.spreads = get_spreads(self.path_to_market_data)
       articles_avg = self.load_data(path_test_with_ret)
       comps_avg = articles_avg.groupby(['comp_short']).mean() 
       best = comps_avg.loc[comps_avg['prediction'].idxmax()].name
       print('the best company -', best)
-      comps_avg.to_excel(self.output_path + 'output.xlsx', sheet_name="Sheet1", engine='openpyxl')
+      # comps_avg.to_excel(self.output_path + 'output.xlsx', sheet_name="Sheet1", engine='openpyxl')
       self.df = articles_avg.groupby(['publ_date', 'comp_short']).mean()
+      # min_max = self.df.groupby('publ_date').agg({'score' : ['min', 'max'], 'prediction' : ['min', 'max']})
+      # min_max.to_csv(self.output_path + '../minmax.csv', mode='a', header=False)
 
-      # a = test_sample(rets_full, 3, 0)
-      a = self.test_strategy(1, 40, 1)
+      a = self.test_strategy(40, 1)
+      # a = self.test_strategy(40, -1)
     else:
       print(self.path_to_saved_model + 'saved.h5', 'not found')
             
+  def test_strategy(self, sample_size=1, sign=1):
+    self.df.prediction *= sign 
+    # self.df.prediction *= -sign # !!! choosing the worst predictions
+    self.df = self.df.drop('score', axis=1)
+    score_inds = self.df.index.unique(level=0) 
+    holidays = ~score_inds.isin(self.quotes.index.levels[0])
+    if holidays.any():
+      import numpy as np
+      to_avg = np.logical_or(holidays[1:], holidays[:-1])
+      to_avg = np.concatenate([to_avg, holidays[-1:]])
+      shifted = np.concatenate([[False], to_avg[:-1]])
+      for_grouping = np.logical_xor(to_avg, shifted)
+      groups = np.cumsum(for_grouping)
+      groups_df = pd.DataFrame({'groups': groups}, index=score_inds)
+      groups_df = groups_df[to_avg]
+      merged = pd.merge(self.df, groups_df, left_on='publ_date', right_index=True)
+      holidays_scores = merged.reset_index().groupby(['groups', 'comp_short']).agg({'publ_date': 'min', 'prediction': 'mean'})
+      holidays_scores = holidays_scores.reset_index().drop('groups', axis=1).set_index(['publ_date', 'comp_short'])
+      workday_scores = self.df[~self.df.index.get_level_values(level=0).isin(holidays_scores.index.levels[0])]
+      self.df = pd.concat([workday_scores, holidays_scores])
+
+    inds = self.df.prediction.groupby('publ_date', group_keys=False).nlargest(sample_size).index
+    rets_full = self.df.loc[inds]
+    self.quotes.index.names = ['publ_date', 'comp_short']
+    merged = pd.merge(rets_full, self.quotes, left_index=True, right_index=True)
+    merged = pd.merge(merged, self.spreads, left_index=True, right_index=True)
+    costs = merged.quote * (1 + merged.spreads * 0.5) + 0.005
+    sell = merged.next_day_quote * (1 - merged.spreads * 0.5) - 0.005
+    merged['yield'] = sell / costs
+    merged['pos'] = merged.groupby(['publ_date']).cumcount()
+    # merged.groupby(['pos', 'publ_date', 'comp_short']).mean().to_excel('output2.xlsx')
+    merged = merged.groupby(['pos', 'publ_date', 'comp_short'])['yield'].mean()
+    merged.to_csv(self.output_path + '../output.csv', mode='a', header=False)
+    # merged = merged.reset_index().set_index(['pos', 'publ_date'])
+    # merged.to_excel(self.output_path + '../output.xlsx')
+    # merged = merged.reset_index()[['yield', 'pos']].groupby(['pos']).prod()
+    pass
+
   def init_model(self):
     config = RobertaConfig.from_pretrained(self.pretrained_model_name)
     config.num_labels = 1
     config.vocab_size = len(self.dataset.tok.vocab)
-    # config.hidden_size = 512
-    # config.intermediate_size = 2048
-    # config.num_attention_heads = 8
     self.model = TFRobertaForSequenceClassification(config)
-    # self.model.layers[0].trainable = False
 
   def load_model(self):
     self.init_model()
@@ -234,14 +242,11 @@ class stock(test_securities):
     eval_batch_size = tf.cast(self.dataset.validation_data._batch_size, tf.float32)
     self.dataset.validation_data = strategy.experimental_distribute_dataset(self.dataset.validation_data)
 
-    # logger = create_logger(self.output_path + '../')
-
     trainParameters={}
     import json
 
     @tf.function()
     def step_fn(input, labels):
-      #print('retracing')
       with tf.GradientTape() as tape:
         output = self.model(input, training=True)
         loss = tf.keras.losses.MSE(
@@ -250,6 +255,47 @@ class stock(test_securities):
       grads = tape.gradient(loss, self.model.trainable_variables)
       optimizer.apply_gradients(list(zip(grads, self.model.trainable_variables)))
       training_loss.update_state(loss * strategy.num_replicas_in_sync)
+
+    # def eval_acc_step_fn():
+    #   @tf.function()
+    #   def get_y_pred(i, labels):
+    #     output = self.model(i).logits
+    #     loss = tf.keras.losses.MSE(
+    #         labels, output)
+    #     loss = tf.nn.compute_average_loss(loss, global_batch_size=eval_batch_size)
+    #     eval_loss.update_state(loss * strategy.num_replicas_in_sync)
+    #     return output
+
+    #   y_pred = []
+    #   labels = []
+    #   for i, l in self.dataset.validation_data: 
+    #     # per_replica_result = get_y_pred(i, l)
+    #     per_replica_result = strategy.run(get_y_pred, args=(i, l))
+    #     try:
+    #       per_replica_result = strategy.gather(per_replica_result, axis=0)
+    #       l = l.values
+    #     except AttributeError:
+    #       pass
+    #     y_pred.append(per_replica_result)
+    #     labels += [l]
+    #   y_pred = tf.concat(y_pred, 0)
+    #   y_pred = tf.reshape(y_pred, [-1])
+    #   labels = tf.concat(labels, 0)
+    #   labels = tf.reshape(labels, [-1])
+
+    #   comps = self.dataset.validation_data_comps[:tf.shape(y_pred)[0]]
+
+    #   def groupby(y):
+    #     d = {'col1': comps, 'col2': y}
+    #     df = pd.DataFrame(data=d)
+    #     df = df.groupby('col1').mean()
+    #     return df
+
+    #   df_pred = groupby(y_pred)
+    #   df_fact = groupby(labels)
+    #   spearman = spearmanr(df_pred.values, df_fact.values)
+
+    #   return spearman.correlation
 
     @tf.function()
     def eval_step_fn(input, labels):
@@ -262,9 +308,6 @@ class stock(test_securities):
 
     with strategy.scope():
       self.init_model()
-
-      def scheduler(epoch, lr):
-        return rsqrt(epoch) * 1e-4
 
       class RsqrtSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
         def __call__(self, step):
@@ -293,8 +336,6 @@ class stock(test_securities):
       )
       training_loss = tf.keras.metrics.Mean('training_loss', dtype=tf.float32)
       eval_loss = tf.keras.metrics.Mean('eval_loss', dtype=tf.float32)
-      # eval_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(
-      #   'eval_accuracy', dtype=tf.float32)
       # model.layers[-1].encoder.trainable = False
       import pickle
       if not os.path.isfile(self.path_to_saved_model + 'trainParameters.txt'):
@@ -328,21 +369,18 @@ class stock(test_securities):
     firstIter = trainParameters['iter']
     start = time.time()
     print('training started...')
-    min_tr_loss = 0.0014
+    min_tr_loss = 0.000565
     min_eval_loss = 0.00091
     for _ in range(1):
       for i, data in zip(
-        range(firstIter, 176, nsteps), 
-        self.dataset.next(verbose=1, roundup=True, max_batches_per_file=8)
+        range(firstIter, 4000, nsteps), 
+        self.dataset.next(verbose=1, roundup=True, max_batches_per_file=35)
+        # self.dataset.next_randomly(verbose=1, roundup=True)
         ):
-        # if i > 176:
-        #   return
         batch_size = tf.cast(data._batch_size, tf.float32)
         data = strategy.experimental_distribute_dataset(data)
         training_loss.reset_states()
         for input, labels in data:
-          # continue
-          # print('step')
           # step_fn(input, labels)
           strategy.run(step_fn, args=(input, labels))
           tl = training_loss.result()
@@ -352,17 +390,13 @@ class stock(test_securities):
           #     optimizer._decayed_lr(tf.float32),
           #     )
           # print(out)
-          if i > 45 and min_tr_loss > tl:
-            min_tr_loss = tl
-          # if True:#(i + nsteps) % 1000 == 0:
+          if i > 700 and min_tr_loss > tl:
+            # min_tr_loss = tl
             eval_loss.reset_states()
-            # batch_size = eval_batch_size
-            # eval_start = time.time()
             for input, labels in self.dataset.validation_data: 
-              # batch_size = tf.cast(tf.shape(labels)[0], tf.float32)
-              # eval_step_fn(input, labels)
+              # eval_acc_step_fn(input, labels)
               strategy.run(eval_step_fn, args=(input, labels))
-            # print("evaluation time: ", time.time() - eval_start)
+
             evaluation_loss = float(eval_loss.result())
             r = optimizer._decayed_lr(tf.float32)
             out = 'Date\t{}\tEpoch\t{}\tLoss\t{:.6f}\tVal loss\t{:.8f}\ttime:\t{:.0f}\tlr:\t{:.6f}\n'.format(
@@ -370,6 +404,7 @@ class stock(test_securities):
               i + nsteps,
               round(float(tl), 6),
               round(evaluation_loss, 6),
+              # round(eval_acc, 6),
               time.time() - start,
               r,
               )
@@ -380,18 +415,11 @@ class stock(test_securities):
               with open(self.output_path + '../file.log', 'a') as f:
                 f.write(out)
               min_eval_loss = evaluation_loss
-              # return
+              # if evaluation_loss < 0.000142:
+              #   return
+            if i > 1100:
+              return
             pass
-
-            #   if evaluation_loss <= trainParameters['bestLoss']:
-            #       print('saving...')
-            #       self.model.save_weights(self.output_path + 'saved.h5')
-            #       weight_values = optimizer.get_weights()
-            #       with open(self.output_path + 'optimizer.pkl', 'wb') as f:
-            #           pickle.dump(weight_values, f)
-            #       trainParameters['bestLoss'] = evaluation_loss
-            #       trainParameters['iter'] = i + nsteps
-            #       json.dump(trainParameters, open(self.output_path + "trainParameters.txt",'w'))
 
   def convert_text_to_indices(self, sentence):
     sentence = self.dataset.bpe.process_line(sentence)
@@ -406,40 +434,6 @@ class stock(test_securities):
     cat = tf.argmax(output, -1).numpy().squeeze((-1))[0]
     account = self.dataset.index2word[cat]
     return account
-
-  def save_evaluation_results(self):
-    self.load_model()
-    self.dataset.prepare_for_training('accounting.pkl')
-    freq = [0] * len(self.dataset.index2word_tar)
-    for v in self.dataset.buckets_files.values():
-      if v.size != 0:
-        for l in v[:, -1].tolist():
-          freq[l] += 1
-    import openpyxl
-    name = 'analysis_validation.xlsx' #'Карточка счета 51 за January 2021 Общество с ограниченной ответственностью  Трейд Хаус Компани .xlsx'
-    wb = openpyxl.load_workbook(name)
-    ws = wb['Sheet2']
-    output = self.model.predict(self.dataset.validation_data)[0]
-    cat = tf.argmax(output, -1).numpy()
-    probs = tf.nn.softmax(output)
-    for ind, (inp, labels) in enumerate(self.dataset.validation_data.unbatch().batch(1)):
-      best = cat[ind]
-      account = self.dataset.index2word_tar[best]
-      sent = []
-      for i in inp['input_ids'][0].numpy().tolist():
-        if i == self.dataset.PAD_token:
-          break
-        s = self.dataset.index2word[i]
-        sent += [s]
-      ws['A' + str(ind + 2)] = ' '.join(sent)
-      ws['B' + str(ind + 2)] = account
-      ws['C' + str(ind + 2)] = self.dataset.index2word_tar[labels[0].numpy()]
-      ws['D' + str(ind + 2)] = probs[ind][best].numpy()
-    # for ind, f in enumerate(freq):
-    #   ws['G' + str(ind + 2)] = self.dataset.index2word_tar[ind]
-    #   ws['H' + str(ind + 2)] = f
-      
-    wb.save(name)
 
 from transformers import TFDistilBertForSequenceClassification, DistilBertConfig, DistilBertTokenizerFast
 
@@ -583,22 +577,7 @@ def group_companies():
             
           pass
 
-# if __name__ == '__main__':
-  # from pathlib import Path
-  # import pandas as pd
-  # pathlist = Path("../download_from_CC/result").glob('*.parquet')
-  # # comps = []
-  # for i, path in enumerate(sorted(pathlist)):
-  #   # if i > 40:
-  #   #   break
-  #   table = pd.read_parquet(path)
-  #   comps += table.comp_short.unique().tolist()
-  # for c in comps:
-  #   print(c)
-
 def train_sample():
-  i = 6
-  j = 1
   path_to_working_days = ''
   if 'kaggle' in globals():
     path_to_working_days = '/kaggle/input/working-days/'
@@ -608,7 +587,10 @@ def train_sample():
     header=0,
     engine='openpyxl'
     )
-  for eval_start in df.eval_start.dt.date[i:i + j]:
+  # inds = [35, 36, 37, 39, 40, 41, 42, 43, 46, 47, 49, 55]
+  # dates = [df.eval_start.dt.date[i] for i in inds]
+  # for eval_start in dates:
+  for eval_start in df.eval_start.dt.date[:60]:
     wdi_eval = df.index[df.eval_start_sorted.dt.date == eval_start]
     try:
       eval_end, train_start, train_end, test_start, test_end = \
@@ -616,15 +598,15 @@ def train_sample():
         df.eval_start_sorted.dt.date.iloc[wdi_eval + 2].values[0], \
         df.eval_start_sorted.dt.date.iloc[wdi_eval + 24].values[0], \
         df.eval_start_sorted.dt.date.iloc[wdi_eval + 25].values[0], \
-        df.eval_start_sorted.dt.date.iloc[wdi_eval + 31].values[0]
+        df.eval_start_sorted.dt.date.iloc[wdi_eval + 26].values[0]
     except:
       continue
     print(eval_start, eval_end, train_start, train_end, test_start, test_end)
-    s = stock_convbert(time_range(eval_start, eval_end), time_range(train_start, train_end), cloud)
+    # s = stock_convbert(time_range(eval_start, eval_end), time_range(train_start, train_end), cloud)
     # s.init_dataset()
     # s.dataset.prepare_for_training()
-    s.train()
-    # stock_convbert(time_range(test_start, test_end), time_range(train_start, train_end), cloud).test()
+    # s.train()
+    stock_convbert(time_range(test_start, test_end), time_range(train_start, train_end), cloud).test()
     pass
 
 def daily_prepare_for_training():
@@ -668,6 +650,7 @@ def daily_test():
   df.DATE.dt.date.iloc[-1]
   stock_convbert(time_range(test_start, test_end), time_range(train_start, train_end), cloud).test()
 
+# tf.random.set_seed(0)
 # daily_prepare_for_training()
 # daily_train()
 # daily_test()

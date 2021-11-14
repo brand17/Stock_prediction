@@ -66,7 +66,7 @@ class stock_data_it():
       #   table.publ_time - timedelta(hours=4) - timedelta(days=1.5)
       #   ).dt.date
       publ_date = (
-        table.publ_time + timedelta(days=1)
+        table.publ_time - timedelta(days=1)
         ).dt.date
       li = self.md.returns.index.get_indexer(publ_date)
       ri = self.md.returns.columns.get_indexer(table.comp_short)
@@ -211,7 +211,9 @@ class stock_data(stock_data_it):
     return pathlist
 
   def prepare_for_training(self):
-    self.validation_data = self.get_validation_sentences(self.trainer.test_range)
+    val_data = self.get_validation_sentences(self.trainer.test_range)
+    self.validation_data = val_data[0]
+    self.validation_data_comps = val_data[1]
 
   # def input_from_text(self, sentence):
   #   inp = self.tok(sentence, return_token_type_ids=False)
@@ -247,8 +249,8 @@ class stock_data(stock_data_it):
       'scores': [], 'comp_short': [], 'articleID': []
       }
     
-  def load_batch(self, r, k=None, batch_size=None, roundup=True, verbose=0, max_batches_per_file=None):
-    for sent in self.sentences_it(r, roundup, verbose, max_batches_per_file):
+  def load_batch(self, it, k=None, batch_size=None):
+    for sent in it:
       length = self.process_sentence(sent)
       if length is not None:
         if k is not None and length != k:
@@ -319,16 +321,36 @@ class stock_data(stock_data_it):
         sentences = pickle.load(f)
     if self.device == 'CPU':
       sentences = [s[:self.num_validation_samples] for s in sentences]
-    sentences = self.dataset_from_target(sentences[:2], drop_remainder=True)
+    validation_dataset = self.dataset_from_target(sentences[:2], drop_remainder=True)
+    comps = sentences[3]
     # if self.device == 'TPU':
     #   sentences = self.dataset_from_target(sentences[:2], drop_remainder=True)
     # else:
     #   sentences = self.dataset_from_target(sentences[:2], drop_remainder=True)
-    return sentences
+    return validation_dataset, comps
 
   def next(self, verbose=0, roundup=True, max_batches_per_file=None):
-    for b in self.load_batch(self.trainer.train_range, verbose=verbose, 
-      roundup=roundup, max_batches_per_file=max_batches_per_file):
+    it = self.sentences_it(self.trainer.train_range, roundup, verbose, max_batches_per_file)
+    for b in self.load_batch(it):
+      sentences = self.dataset_from_target(b[:2], drop_remainder=True)
+      yield sentences
+
+  def random_it(self, verbose, roundup=True):
+    tables = [self.dataframe_from_file(path, self.trainer.train_range) \
+      for path in self.files_it(self.trainer.train_range, verbose)]
+    table = pd.concat(tables)
+    table = table.sample(frac=1)
+    while True:
+      for articleID, article in enumerate(self.articles_it_in_dataframe(table)):
+        for sent in article[0]:
+          yield (sent,) + article[1:] + (articleID,)
+        pass
+      if not roundup:
+        return
+  
+  def next_randomly(self, verbose=0, roundup=True):
+    it = self.random_it(verbose, roundup)
+    for b in self.load_batch(it):
       sentences = self.dataset_from_target(b[:2], drop_remainder=True)
       yield sentences
   
