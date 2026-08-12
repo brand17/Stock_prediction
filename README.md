@@ -1,55 +1,52 @@
-# End-to-End Algorithmic Stock Prediction Pipeline
+### Stock Prediction with Financial News Sentiment
 
-An advanced, production-oriented quantitative framework designed for multi-asset price forecasting and algorithmic alpha generation. This repository integrates a custom Transformer-based deep learning architecture with automated raw alternative data harvesting (NLP financial news sentiment analysis) and real-time market data orchestration.
+This repository implements a high-performance text-mining pipeline for asset return prediction, comparing the econometric SESTM algorithm with modern Transformer-based architectures. The foundational framework is adapted from the National Bureau of Economic Research working paper Predicting Returns With Text Data by Zheng Tracy Ke, Bryan T. Kelly, and Dacheng Xiu. 
 
-## 🏛️ System Architecture & Repository Layout
+### Project Overview
 
-The system is structurally split into decoupled data ingestion, tokenization, text classification, and sequential modeling modules:
+Quantifying unstructured textual information remains a central challenge in empirical finance. This project provides a comparative implementation of two distinct methodologies to extract return-predictive sentiment signals from financial news text: 
 
-*   **`/transformer`**: Core deep learning engine featuring a custom implementation of sequence-to-sequence Transformer layers optimized for high-frequency financial time-series forecasting.
-*   **`/news_crawler`**: Distributed data harvesting module built to systematically crawl and parse unstructured alternative textual datasets (financial news portals, corporate press releases).
-*   **`/news_classifier`**: NLP classification pipeline that ingests crawled textual streams and scores latent market sentiment to serve as dynamic feature weights.
-*   **`market_data.py`**: Robust data engineering interface for extracting, cleaning, adjusting, and aligning raw historical and spot financial price vectors.
-*   **`learn_bpe.py` & `apply_bpe.py`**: Byte Pair Encoding (BPE) subword tokenization infrastructure optimized to preprocess raw text corpora for efficient neural vocabulary encoding without vocabulary explosion.
+1. **SESTM (Sentiment Extraction via Screening and Topic Modeling):** A transparent, supervised learning methodology combining correlation screening, two-topic modeling, and penalized likelihood estimation.
+2. **Transformer-Based Sentiment Models:** An extension designed to capture contextual word interactions, semantic nuances, and long-range dependencies that traditional bag-of-words models omit.
 
-## 🛠️ Key Technical Features
+### Core Methodology: SESTM
 
-### 1. Transformer-Driven Time-Series Modeling
-Unlike standard text-based language models, the sequence-to-sequence architecture inside `/transformer` is optimized to process multi-dimensional inputs. It ingests historical price features (OHLCV, volatility, funding costs) concatenated with our engineered NLP sentiment metrics to predict future price trajectories and capture complex, non-linear dependencies across lookback windows.
+The SESTM algorithm bypasses generic, ad hoc financial dictionaries in favor of a context-specific, supervised scoring pipeline consisting of three steps: 
 
-### 2. Alternative Data & Sentiment NLP Pipeline
-*   **Subword Tokenization:** BPE tokenization (`learn_bpe.py`) trains a compressed vocabulary on financial domain text to cleanly handle complex market terminology and acronyms.
-*   **Latent Sentiment Attribution:** The classification layer evaluates incoming raw news signals on the fly, outputting structured alpha indicators (bullish/bearish distributions) that function as volatility modulators in the primary pricing engine.
+### 1. Feature Screening
 
-### 3. Quantitative Risk & Data Engineering
-The framework utilizes strict data transformations via `market_data.py` to prevent data leakage—a critical pitfall in financial ML. All metrics are strictly forward-aligned and normalized using rolling z-score techniques to maintain stationarity across varying market regimes.
+Isolates sentiment-charged words from a high-dimensional vocabulary. It calculates the marginal frequency with which a specific word co-occurs with positive daily stock returns. Words exceeding or falling below optimized significance thresholds are retained, discarding sentiment-neutral vocabulary noise. 
 
-## 🚀 Getting Started
+### 2. Supervised Topic Modeling
+
+Assigns term-specific weights by fitting a generative, likelihood-based two-topic mixture model to the screened word counts. It extracts a frequency vector representing overall word usage and a tone vector representing the relative positive or negative orientation of each word. 
+
+### 3. Article Scoring
+
+Aggregates term frequencies into a singular, document-level sentiment score using a penalized maximum likelihood estimator. The implementation uses a Beta-distributed prior to shrink scores toward neutrality when articles contain sparse sentiment-charged text, stabilizing out-of-sample portfolio predictions. 
+
+### Transformer Enhancement
+
+While SESTM is highly scalable and interpretable, its underlying bag-of-words assumption ignores word order and context. This repository introduces deep learning alternatives to improve predictive boundaries: 
+
+* **Contextual Embeddings:** Captures shifts in term meaning based on surrounding sentence structure, resolving misclassifications caused by negation or domain-specific idioms.
+* **Attention Mechanisms:** Dynamically determines the relative importance of phrases across entire articles, mimicking how market participants prioritize core news elements over auxiliary data.
+* **Supervised Return Fine-Tuning:** Pre-trained sequence classification models are fine-tuned using asset return signs as direct training targets, preserving the supervised essence of the original paper.
+
+### Getting Started
 
 ### Prerequisites
-*   Python 3.10+
-*   PyTorch / TensorFlow 2.x
-*   NumPy / Pandas
 
-### Installation & Execution Blueprint
-1. Clone the repository:
-   ```bash
-   git clone https://github.com
-   cd Stock_prediction
-   ```
+* Python 3.8 or higher
+* PyTorch
+* Hugging Face Transformers
+* NLTK
+* Scikit-learn
+* Pandas and NumPy
 
-2. Run the tokenization and text classification pipeline to extract sentiment indices:
-   ```bash
-   python learn_bpe.py --input raw_corpus.txt --output vocab.bpe
-   python apply_bpe.py --vocab vocab.bpe --text input_news.txt
-   ```
+### Execution Pipeline
 
-3. Initialize market data structures and trigger the sequential Transformer pipeline:
-   ```bash
-   python market_data.py --ticker MSFT --start 2021-01-01
-   python transformer/train.py --config config.yaml
-   ```
-
-## ⚖️ Core Philosophy
-
-This architecture operates on strict determinism and high performance. The code shifts away from standard black-box wrappers toward exposed tensor manipulation, making it highly customizable for exotic derivatives modeling, high-frequency limit order book (LOB) dynamics, and dynamic portfolio allocation constraints.
+1. Run the data preprocessing script to normalize, stem, and tokenize raw news feeds.
+2. Execute the SESTM script to perform marginal correlation screening and maximum likelihood optimization.
+3. Execute the Transformer notebook to fine-tune text classification heads on historical return benchmarks.
+4. Run the backtesting script to simulate an open-to-open daily long-short trading strategy based on generated signals.
